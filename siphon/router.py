@@ -29,15 +29,20 @@ def candidates(model: str) -> list:
     return out
 
 
-def pick(affinity_key: str, model: str) -> object:
-    """选账号。粘性 > 主力(在途未满) > 在途最少(并列: 剩余额度多者 / 权重高者)。"""
-    cands = candidates(model)
+def pick(affinity_key: str, model: str, exclude: set | None = None) -> object:
+    """选账号。粘性 > 主力(在途未满) > 在途最少(并列: 剩余额度多者 / 权重高者)。
+
+    exclude: 本轮代理已失败过的账号 —— 重试时必须全部跳过,
+    否则可能再次选中坏账号并 break, 漏掉仍有额度的其他账号。
+    """
+    skip = exclude or set()
+    cands = [a for a in candidates(model) if a.id not in skip]
     if not cands:
         raise NoRoute(f"模型 {model} 无可用账号路由(全部熔断/禁用/不在白名单)")
 
     if affinity_key:
         sticky_aid = accounts.sticky_get(affinity_key)
-        if sticky_aid:
+        if sticky_aid and sticky_aid not in skip:
             for a in cands:
                 if a.id == sticky_aid:
                     return a

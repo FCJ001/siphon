@@ -138,6 +138,17 @@ def overview(range_name: str = "today") -> dict:
         " SUM(cost_actual) AS cost_actual"
         " FROM requests WHERE ts>=? GROUP BY model ORDER BY cost_actual DESC",
         (since,))
+    # 输出成本占比(健康指标): 输出全价 / 实际总成本, 按模型价目在 Python 侧折算
+    from . import config as _cfg
+    out_cost = in_cost = 0.0
+    for m in by_model:
+        p_in, p_out = _cfg.price_for(m["model"])
+        out_cost += (m["completion_tokens"] or 0) / 1e6 * p_out
+        in_cost += ((m["prompt_tokens"] or 0) - (m["cached_tokens"] or 0)) / 1e6 * p_in \
+            + (m["cached_tokens"] or 0) / 1e6 * p_in * _cfg.CACHED_PRICE_RATIO
+    total_cost = out_cost + in_cost
+    totals["output_cost_pct"] = round(out_cost / total_cost * 100, 1) if total_cost else 0.0
+    totals["baseline_model"] = config.COUNTERFACTUAL_MODEL
     return {"totals": totals, "by_model": by_model}
 
 

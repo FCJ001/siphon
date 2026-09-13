@@ -1,9 +1,10 @@
-"""优化器: 分轮次 effort 控制 / 工具结果规范化 / 精确响应回放。
+"""优化器: 工具结果压缩 / 精确响应回放 / (可选)分轮次 effort 控制。
 
-规则(siphon design.md §5):
-  - effort 只降不升; 出结论的尾声轮不降
-  - 结果规范化只处理"新生成内容"(全价), 不做历史折叠(缓存价, 负收益)
+质量优先(siphon design.md §5):
+  - 工具结果压缩只碰超过阈值的大消息, 常规结果一字不动; 数组只裁头部(时序最近最有用)
+  - effort 控制默认关闭, 仅客户端显式按请求开启; 且只降不升
   - 回放只对低温度请求启用
+本模块不含任何具体业务/上游语义 —— 对所有 OpenAI 兼容客户端一视同仁。
 """
 from __future__ import annotations
 
@@ -14,15 +15,24 @@ from collections import OrderedDict
 
 from . import config
 
-# ---------------- 分轮次 effort ----------------
+# ---------------- (可选)分轮次 effort ----------------
 
 def tool_rounds(messages: list) -> int:
     return sum(1 for m in messages if isinstance(m, dict) and m.get("role") == "tool")
 
 
-def rewrite_effort(body: dict) -> tuple[dict, str | None, str | None]:
+def effort_opt_in(request_headers: dict | None = None) -> bool:
+    """effort 优化是否对该请求生效: 全局开关 或 客户端显式 opt-in。"""
+    if config.OPT_EFFORT:
+        return True
+    if request_headers:
+        return str(request_headers.get("x-siphon-effort-policy", "")).lower() == "optimize"
+    return False
+
+
+def rewrite_effort(body: dict, enabled: bool = True) -> tuple[dict, str | None, str | None]:
     """返回 (改写后body, 改写前effort, 改写后effort)。未改写时前后相同。"""
-    if not config.OPT_EFFORT or not body.get("tools"):
+    if not enabled or not body.get("tools"):
         return body, body.get("reasoning_effort"), body.get("reasoning_effort")
 
     rounds = tool_rounds(body.get("messages") or [])
@@ -41,14 +51,20 @@ def rewrite_effort(body: dict) -> tuple[dict, str | None, str | None]:
     return out, cur, want
 
 
-# ---------------- 工具结果规范化(日K降采样) ----------------
+# ---------------- 工具结果压缩(通用, 与业务无关) ----------------
+_TRUNC_MARK = "\n…[siphon: 超长工具结果已截断]"
 
-_KLINE_KEYS = ("date", "open", "high", "low", "close", "volume")
 
+def compact_tool_results(body: dict) -> tuple[dict, int]:
+    """超大 tool 消息的保守压缩。返回 (body, 省下的字符数)。
 
-def downsample_tool_results(body: dict) -> tuple[dict, int]:
-    """把 tool 消息里的日K数组压到最近 N 根。返回 (body, 省下的字符数)。"""
-    if not config.OPT_KLINE:
+    质量优先的边界:
+      - 只处理超过 TOOL_TRUNC_CHARS 的消息, 常规结果不动
+      - JSON 数组: 只裁头部, 保留最近 TOOL_ARRAY_KEEP 条(时间序列最近的最有用)
+      - 非数组长文本: 尾部截断并留标记
+      - 不重写字段、不删字段、不做任何"摘要" —— 摘要会改变模型看到的事实
+    """
+    if not config.OPT_TOOLTRUNC:
         return body, 0
     saved = 0
     messages = body.get("messages")
@@ -58,22 +74,21 @@ def downsample_tool_results(body: dict) -> tuple[dict, int]:
         if not (isinstance(m, dict) and m.get("role") == "tool"):
             continue
         content = m.get("content")
-        if not isinstance(content, str):
+        if not isinstance(content, str) or len(content) <= config.TOOL_TRUNC_CHARS:
             continue
         try:
             data = json.loads(content)
         except ValueError:
-            continue
-        if not (isinstance(data, list) and data
-                and isinstance(data[0], dict) and "close" in data[0]):
-            continue
-        if len(data) <= config.OPT_KLINE_KEEP:
-            continue
-        trimmed = json.dumps(
-            [{k: r.get(k) for k in _KLINE_KEYS} for r in data[-config.OPT_KLINE_KEEP:]],
-            ensure_ascii=False)
-        saved += len(content) - len(trimmed)
-        messages[i] = {**m, "content": trimmed}
+            trimmed = content[:config.TOOL_TRUNC_CHARS] + _TRUNC_MARK
+        else:
+            if isinstance(data, list) and data and isinstance(data[0], dict) \
+                    and len(data) > config.TOOL_ARRAY_KEEP:
+                trimmed = json.dumps(data[-config.TOOL_ARRAY_KEEP:], ensure_ascii=False)
+            else:
+                trimmed = content[:config.TOOL_TRUNC_CHARS] + _TRUNC_MARK
+        if len(trimmed) < len(content):
+            saved += len(content) - len(trimmed)
+            messages[i] = {**m, "content": trimmed}
     return body, saved
 
 

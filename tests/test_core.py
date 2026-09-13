@@ -116,25 +116,46 @@ def test_effort_no_tools_untouched():
     assert after == "max"
 
 
-def test_kline_downsample():
-    bars = [{"date": f"2026-08-{i:02d}", "open": 1, "high": 2, "low": 0.5,
-             "close": 1.5, "volume": 10, "extra": "x"} for i in range(1, 41)]
-    body = {"messages": [{"role": "tool", "content": json.dumps(bars)}]}
-    out, saved = optimizers.downsample_tool_results(body)
+def test_compact_large_array_keeps_tail():
+    """通用工具结果压缩: 只碰超阈值消息, 数组只裁头部(保留最近 N 条)。"""
+    rows = [{"ts": f"2026-09-{i:02d}T09:30:00", "open": 1, "high": 2,
+             "low": 0.5, "close": 1.5, "volume": 12345} for i in range(1, 61)]
+    body = {"messages": [{"role": "tool", "content": json.dumps(rows, ensure_ascii=False)}]}
+    assert len(body["messages"][0]["content"]) > config.TOOL_TRUNC_CHARS
+    out, saved = optimizers.compact_tool_results(body)
     kept = json.loads(out["messages"][0]["content"])
-    assert len(kept) == config.OPT_KLINE_KEEP
-    assert set(kept[0]) <= {"date", "open", "high", "low", "close", "volume"}
+    assert len(kept) == config.TOOL_ARRAY_KEEP
+    assert kept[-1]["ts"] == rows[-1]["ts"]          # 保留的是最近的数据
     assert saved > 0
 
 
-def test_kline_ignores_non_tool_and_bad_json():
+def test_compact_ignores_small_and_non_tool():
+    small = json.dumps([{"close": 1}] * 5)
     body = {"messages": [
+        {"role": "tool", "content": small},
         {"role": "tool", "content": "not json"},
-        {"role": "user", "content": json.dumps([{"close": 1}])},
+        {"role": "user", "content": "x" * 9000},
     ]}
-    out, saved = optimizers.downsample_tool_results(body)
-    assert saved == 0
-    assert out["messages"][0]["content"] == "not json"
+    out, saved = optimizers.compact_tool_results(body)
+    assert saved == 0                                 # 小消息与非 tool 消息一字不动
+    assert out["messages"][0]["content"] == small
+
+
+def test_compact_long_text_gets_marker():
+    body = {"messages": [{"role": "tool", "content": "x" * 5000}]}
+    out, saved = optimizers.compact_tool_results(body)
+    assert saved > 0
+    assert "[siphon:" in out["messages"][0]["content"]
+
+
+def test_effort_disabled_by_default_and_opt_in():
+    """质量优先: effort 控制默认关闭, 显式 opt-in(enabled=True)才生效。"""
+    body = {"model": "m", "reasoning_effort": "max", "tools": [{"t": 1}],
+            "messages": [{"role": "user", "content": "hi"}]}
+    _, _, after = optimizers.rewrite_effort(body, enabled=False)
+    assert after == "max"                             # 未开启: 原样
+    _, _, after = optimizers.rewrite_effort(body, enabled=True)
+    assert after == "low"
 
 
 def test_replay_roundtrip():
@@ -154,8 +175,34 @@ def test_router_sticky_and_failover():
     assert router.pick("sess-1", "deepseek-v4-flash").id == a.id
 
     # 主力熔断 → 粘性失效 → 落到 B
-    accounts.mark_account_open(a.id, time.time() + 600)
+    accounts.mark_account_open(a.id, ttl=600)
     assert router.pick("sess-1", "deepseek-v4-flash").id == b.id
+
+
+def test_pick_skips_excluded_accounts():
+    """B5 回归: 重试时已失败的账号必须跳过, 不能 break 掉仍有额度的账号。"""
+    a = _mkacct(alias="A", primary=True)
+    b = _mkacct(key="sk-test-ef04", alias="B")
+    assert router.pick("", "deepseek-v4-flash", exclude={a.id}).id == b.id
+    with pytest.raises(router.NoRoute):
+        router.pick("", "deepseek-v4-flash", exclude={a.id, b.id})
+
+
+def test_mark_account_open_uses_ttl_seconds():
+    """B2 回归: 熔断内部一律 monotonic + TTL(秒), 不接受墙钟时间戳。
+
+    quota 轮询曾把 time.time()+3600 传进来 —— 两套时钟混用等于永久熔断。
+    用「剩余时间 ≈ ttl」验证契约, 不比较时钟量级(平台差异不可靠)。
+    """
+    a = _mkacct(alias="A", primary=True)
+    _mkacct(key="sk-test-ef05", alias="B")
+    accounts.mark_account_open(a.id, ttl=600)
+    st = accounts.breaker_state(a.id)
+    assert st["account_open_until"] > 0
+    remaining = st["account_open_until"] - time.monotonic()
+    assert 590 <= remaining <= 610, f"剩余 {remaining:.0f}s 应 ≈ ttl 600s"
+    assert st["account_open_until_iso"]                    # 展示用墙钟 ISO 已换算
+    assert router.pick("", "deepseek-v4-flash").id != a.id
 
 
 def test_router_model_down_only_affects_that_model():

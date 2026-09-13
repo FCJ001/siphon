@@ -28,7 +28,8 @@ def _err(status: int, message: str) -> JSONResponse:
 
 
 def _affinity_key(request: Request) -> str:
-    """客户端自带会话标识时直接复用(a-share-research-os 会发 x-opencode-session)。"""
+    """会话亲和键: 客户端自带会话标识(x-siphon-session / x-opencode-session / x-request-id)
+    就直接复用; 都没有则共享 default 桶(缓存视角仍优于随机漂移)。"""
     for h in ("x-siphon-session", "x-opencode-session", "x-request-id"):
         v = request.headers.get(h)
         if v:
@@ -129,23 +130,24 @@ async def _open_stream(body: dict, hdrs: dict):
 def _stream_generator(resp: httpx.Response, acct: accounts.Account, meta: dict):
     async def gen():
         buf = bytearray()
-        code = 0
+        failed = False
         try:
             async for chunk in resp.aiter_bytes():
                 buf.extend(chunk)
                 yield chunk
-            code = resp.status_code
         except httpx.HTTPError as e:
-            code = -1
+            failed = True
             db.log_event("stream.broken", {"account_id": acct.id, "error": str(e)[:150]})
         finally:
             await resp.aclose()
             accounts.inflight_dec(acct.id)
             latency = int((time.time() - meta["started"]) * 1000)
-            if code == 0 or not buf:
-                _finish(meta, acct, {}, "error", latency, "上游无返回")
+            usage = parse_sse_usage(bytes(buf)) if buf else {}
+            if failed or not buf:
+                # 断流必须记 error: 客户端拿到的是截断输出, 不能当成功计费
+                _finish(meta, acct, usage, "error", latency,
+                        "流式传输中断" if failed else "上游无返回")
                 return
-            usage = parse_sse_usage(bytes(buf))
             _finish(meta, acct, usage, "ok", latency)
             if usage and meta.get("rkey"):
                 optimizers.replay_put(meta["rkey"], bytes(buf), "text/event-stream", usage)
@@ -173,8 +175,10 @@ async def chat_completions(request: Request, authorization: str | None = Header(
     started = time.time()
 
     # ---- 优化器(改写的是服务端自己的 body 副本, 客户端无感) ----
-    body, effort_in, effort_out = optimizers.rewrite_effort(body)
-    body, saved_chars = optimizers.downsample_tool_results(body)
+    # effort 控制质量敏感 → 默认全局关闭, 客户端带 x-siphon-effort-policy: optimize 才按请求启用
+    body, effort_in, effort_out = optimizers.rewrite_effort(
+        body, enabled=optimizers.effort_opt_in(dict(request.headers)))
+    body, saved_chars = optimizers.compact_tool_results(body)
     saved_tokens = optimizers.estimate_tokens_saved(saved_chars)
 
     meta = {"started": started, "affinity": affinity, "requested_model": requested_model,
@@ -199,11 +203,9 @@ async def chat_completions(request: Request, authorization: str | None = Header(
     last_error = ""
     for attempt in range(config.UPSTREAM_RETRIES + 1):
         try:
-            acct = router.pick(affinity, requested_model)
+            acct = router.pick(affinity, requested_model, exclude=exclude)
         except router.NoRoute as e:
             return _err(503, str(e))
-        if acct.id in exclude:
-            break
         accounts.inflight_inc(acct.id)
 
         upstream_body = dict(body)
@@ -219,6 +221,18 @@ async def chat_completions(request: Request, authorization: str | None = Header(
                 accounts.inflight_dec(acct.id)
                 if resp is not None:
                     await resp.aclose()
+                # 请求本身的错误(400/401/422): 换账号结果相同, 直接把上游报错透传,
+                # 不做无谓重试, 也不把真实原因藏成 503
+                if status in _NO_RETRY_STATUSES:
+                    try:
+                        payload = await resp.aread() if resp is not None else b"{}"
+                        detail = json.loads(payload)
+                    except Exception:  # noqa: BLE001
+                        detail = {}
+                    _finish(meta, acct, detail.get("usage") or {}, "error",
+                            int((time.time() - started) * 1000),
+                            error=f"HTTP {status}: {str(detail.get('error', detail))[:120]}")
+                    return JSONResponse(detail, status_code=status)
                 last_error = err or f"上游 HTTP {status}"
                 meta["retried"] = attempt
                 if status == 429:

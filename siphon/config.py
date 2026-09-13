@@ -83,13 +83,15 @@ MODEL_CAPS_USD = _env_json("SIPHON_MODEL_CAPS_USD", {
 })
 CAP_SAFETY = _env_float("SIPHON_CAP_SAFETY", 0.9)              # 模型级上限用到 90% 即降权
 
-# ---------------- 优化器 ----------------
-OPT_EFFORT = _env_bool("SIPHON_OPT_EFFORT", True)
+# ---------------- 优化器(质量优先: 默认全部保守, effort 控制默认关闭) ----------------
+OPT_EFFORT = _env_bool("SIPHON_OPT_EFFORT", False)   # 默认关: 降 reasoning 深度有质量风险,
+                                                     # 客户端可带 x-siphon-effort-policy: optimize 按请求开启
 OPT_EFFORT_FIRST = _env("SIPHON_OPT_EFFORT_FIRST", "low")
 OPT_EFFORT_MID = _env("SIPHON_OPT_EFFORT_MID", "medium")
 OPT_EFFORT_MID_UNTIL = _env_int("SIPHON_OPT_EFFORT_MID_UNTIL", 4)
-OPT_KLINE = _env_bool("SIPHON_OPT_KLINE", True)
-OPT_KLINE_KEEP = _env_int("SIPHON_OPT_KLINE_KEEP", 20)
+OPT_TOOLTRUNC = _env_bool("SIPHON_OPT_TOOLTRUNC", True)
+TOOL_TRUNC_CHARS = _env_int("SIPHON_TOOL_TRUNC_CHARS", 3000)   # 超过才碰, 常规结果不动
+TOOL_ARRAY_KEEP = _env_int("SIPHON_TOOL_ARRAY_KEEP", 30)       # 数组保留最近 N 条(时序: 最近最有用)
 OPT_REPLAY = _env_bool("SIPHON_OPT_REPLAY", True)
 OPT_REPLAY_TTL = _env_int("SIPHON_OPT_REPLAY_TTL", 180)
 OPT_REPLAY_MAX_TEMP = _env_float("SIPHON_OPT_REPLAY_MAX_TEMP", 0.1)

@@ -88,6 +88,7 @@ def _accounts_view() -> list[dict]:
         d.update({
             "inflight": accounts.inflight(a.id),
             "used_pct": round(accounts.headroom(a.id), 1),
+            "windows": accounts.windows(a.id),
             "resets": accounts.resets(a.id),
             "breaker": accounts.breaker_state(a.id),
         })
@@ -338,9 +339,13 @@ async def get_config(authorization: str | None = Header(None)):
         return _err(401, "unauthorized")
     return _ok({
         "optimizers": {
-            "effort": {"enabled": config.OPT_EFFORT, "first": config.OPT_EFFORT_FIRST,
+            "effort": {"enabled": config.OPT_EFFORT,
+                       "note": "默认关闭(质量优先); 客户端可带 x-siphon-effort-policy: optimize 按请求开启",
+                       "first": config.OPT_EFFORT_FIRST,
                        "mid": config.OPT_EFFORT_MID, "mid_until": config.OPT_EFFORT_MID_UNTIL},
-            "kline": {"enabled": config.OPT_KLINE, "keep": config.OPT_KLINE_KEEP},
+            "tooltrunc": {"enabled": config.OPT_TOOLTRUNC,
+                          "chars": config.TOOL_TRUNC_CHARS,
+                          "array_keep": config.TOOL_ARRAY_KEEP},
             "replay": {"enabled": config.OPT_REPLAY, "ttl": config.OPT_REPLAY_TTL,
                        "max_temp": config.OPT_REPLAY_MAX_TEMP},
         },

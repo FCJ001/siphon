@@ -18,6 +18,9 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web" / "static"
 async def lifespan(app: FastAPI):
     db.connect()
     accounts.bootstrap()
+    restored = accounts.restore_from_snapshots()
+    if restored:
+        print(f"[siphon] 已从快照恢复 {restored} 个账号的配额水位")
     poller = asyncio.create_task(quota.poll_loop())
     yield
     poller.cancel()

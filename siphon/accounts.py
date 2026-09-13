@@ -43,6 +43,7 @@ class Account:
 _mu = threading.Lock()
 _inflight: dict[int, int] = {}
 _headroom: dict[int, float] = {}                 # 账号 → 最紧窗口已用百分比
+_windows: dict[int, dict] = {}                   # 账号 → {rolling|weekly|monthly: {percent, resetsAt}}
 _resets: dict[int, dict] = {}                    # 账号 → {rolling|weekly|monthly: resetsAt}
 _model_down: dict[tuple[int, str], float] = {}   # (账号, 模型) → 解除时刻
 _account_open: dict[int, float] = {}             # 账号 → 解除时刻
@@ -51,7 +52,9 @@ _last_quota_error: float = 0.0
 
 
 def _now() -> float:
-    return time.time()
+    """熔断/粘性的内部时钟 = monotonic(只量流逝时长, 不受 NTP 回拨/改表影响)。
+    展示层要墙钟时用 breaker_state 的 *_iso 换算, 两套时钟严禁混存。"""
+    return time.monotonic()
 
 
 def new_session_id() -> str:
@@ -196,24 +199,33 @@ def inflight(aid: int) -> int:
 # ---------------- 熔断(两级) ----------------
 
 def mark_model_down(aid: int, model: str, ttl: float | None = None) -> None:
-    """模型级: 同账号单模型 429(常见为该模型月度上限)。"""
+    """模型级: 同账号单模型 429(常见为该模型月度上限)。
+
+    同账号第二个(不同的)模型也熔断 → 升级为账号级(说明是 5h/周/总额度类触顶)。
+    比较一律用基础模型名(剥掉 @effort), 避免同名不同档位被误判成两个模型。
+    """
+    base = str(model).split("@", 1)[0]
+    if not base:
+        return
     with _mu:
-        already = any(k[0] == aid and k[1] != model and v > _now()
+        already = any(k[0] == aid and k[1] != base and v > _now()
                       for k, v in _model_down.items())
-        _model_down[(aid, str(model).split("@", 1)[0])] = _now() + (
+        _model_down[(aid, base)] = _now() + (
             ttl if ttl is not None else config.MODEL_DOWN_TTL)
-        # 同账号第二个模型也熔断 → 说明是账号级(5h/周/总额度), 升级
         if already:
-            _account_open[aid] = max(_account_open.get(aid, 0), _now() + config.ACCOUNT_DOWN_TTL)
-    db.log_event("breaker.model_down", {"account_id": aid, "model": model})
+            _account_open[aid] = max(_account_open.get(aid, 0),
+                                     _now() + config.ACCOUNT_DOWN_TTL)
+    db.log_event("breaker.model_down", {"account_id": aid, "model": base})
 
 
-def mark_account_open(aid: int, until: float | None = None) -> None:
+def mark_account_open(aid: int, ttl: float | None = None) -> None:
+    """账号级拉闸。ttl 为秒数(内部一律换算 monotonic, 禁止外部传墙钟时间戳 ——
+    两套时钟差 ~1.7e9 秒, 混用等于永久熔断, quota 轮询曾踩过这个坑)。"""
     with _mu:
-        _account_open[aid] = max(_account_open.get(aid, 0),
-                                 until if until is not None else _now() + config.ACCOUNT_DOWN_TTL)
-    db.log_event("breaker.account_open", {"account_id": aid,
-                                          "until": _account_open[aid]})
+        until = _now() + (ttl if ttl is not None else config.ACCOUNT_DOWN_TTL)
+        _account_open[aid] = max(_account_open.get(aid, 0), until)
+    db.log_event("breaker.account_open",
+                 {"account_id": aid, "ttl": ttl or config.ACCOUNT_DOWN_TTL})
 
 
 def clear_breaker(aid: int) -> None:
@@ -243,10 +255,52 @@ def _iso(epoch: float) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(epoch))
 
 
-def headroom_set(aid: int, used_pct: float, resets: dict) -> None:
+def headroom_set(aid: int, used_pct: float, resets: dict,
+                 windows: dict | None = None) -> None:
     with _mu:
         _headroom[aid] = float(used_pct)
         _resets[aid] = resets
+        if windows:
+            _windows[aid] = windows
+
+
+def windows(aid: int) -> dict:
+    """三窗口各自百分比(水位计用); 无数据时把最紧窗口值摊给三窗(首次添加后)。"""
+    with _mu:
+        if _windows.get(aid):
+            return _windows[aid]
+        pct = _headroom.get(aid)
+        if pct is None:
+            return {}
+        return {k: {"percent": pct} for k in ("rolling", "weekly", "monthly")}
+
+
+def restore_from_snapshots() -> int:
+    """启动时从 quota_snapshots 恢复最近一份水位 —— 重启后路由不再瞎等下一轮轮询。
+
+    旧快照的 resets 列是 str(dict) 无法解析时, 只恢复百分比, resets 置空。
+    """
+    import json as _json
+    n = 0
+    for row in db.query(
+            "SELECT s.* FROM quota_snapshots s "
+            "JOIN (SELECT account_id, MAX(id) AS mid FROM quota_snapshots GROUP BY account_id) m "
+            "ON s.id = m.mid AND s.account_id = m.account_id"):
+        resets = {}
+        try:
+            resets = _json.loads(row["resets"] or "{}")
+        except ValueError:
+            pass
+        wins = {}
+        for k in ("rolling", "weekly", "monthly"):
+            if row[k] is not None:
+                wins[k] = {"percent": row[k], "resetsAt": resets.get(k)}
+        if not wins:
+            continue
+        worst = max(w["percent"] for w in wins.values())
+        headroom_set(row["account_id"], worst, resets, windows=wins)
+        n += 1
+    return n
 
 
 def headroom(aid: int) -> float:

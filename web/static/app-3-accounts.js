@@ -29,10 +29,27 @@
     return `<div class="bar"><i class="${cls}" style="width:${p}%"></i></div>`;
   }
 
+  /* 迷你水位管(表格内联): 三窗 = 5h/周/月 */
+  function miniTube(label, pct) {
+    const p = Math.min(100, Math.max(0, pct || 0));
+    const fill = p >= 85 ? "var(--brand)" : p >= 70 ? "var(--brass)" : "var(--flow)";
+    return `<div class="gauge-tube mini" title="${label} 已用 ${p.toFixed(0)}%">
+      <div class="gauge-warnline"></div>
+      <div class="gauge-fill" style="--fill:${fill};height:${p}%"></div></div>`;
+  }
+
+  function miniGauges(a) {
+    const w = a.windows || {};
+    const pct = k => (w[k]?.percent ?? a.used_pct ?? 0);
+    return `<div class="gauge-mini" style="display:flex;gap:5px;align-items:flex-end">
+      ${miniTube("5h", pct("rolling"))}${miniTube("周", pct("weekly"))}${miniTube("月", pct("monthly"))}
+    </div>`;
+  }
+
   function renderTable() {
     const el = document.getElementById("acct-tbody");
     if (!list.length) {
-      el.innerHTML = '<tr><td colspan="9"><div class="empty">尚无账号 — 点「添加账号」填入 OpenCode Go key</div></td></tr>';
+      el.innerHTML = '<tr><td colspan="8"><div class="empty">尚无账号 — 点「添加账号」填入 OpenCode Go key</div></td></tr>';
       return;
     }
     el.innerHTML = list.map(a => `
@@ -42,9 +59,8 @@
         <td>${a.primary ? "✓" : ""}</td>
         <td class="num">${a.weight}</td>
         <td class="num">${a.inflight}/${a.inflight_cap}</td>
-        <td><div style="display:flex;gap:6px;align-items:center">
-          <span class="num" style="width:88px">5h ${a.used_pct.toFixed(0)}%</span>${winBar(a.used_pct)}</div></td>
-        <td class="num">${Fmt.pct(a.used_pct)}</td>
+        <td><div style="display:flex;gap:10px;align-items:center">
+          ${miniGauges(a)}<span class="num tag">${a.used_pct.toFixed(0)}%</span></div></td>
         <td>${(a.breaker?.models || []).length ? `<span class="badge warn">${a.breaker.models.length} 个模型熔断</span>` : "—"}</td>
         <td style="white-space:nowrap">
           <button class="btn sm" data-act="detail" data-id="${a.id}">详情</button>
@@ -59,7 +75,7 @@
     document.getElementById("pol-overflow").value = policy.overflow || "strict";
     document.getElementById("pol-ttl").value = policy.affinity_ttl ?? 3600;
     document.getElementById("pol-cap").value = policy.primary_inflight_cap ?? 24;
-    document.getElementById("pol-free").checked = !!policy.free_routing;
+    document.getElementById("pol-free").value = policy.free_routing ? "true" : "false";
   }
 
   /* ---- 表单(新增/编辑) ---- */
@@ -73,6 +89,7 @@
     document.getElementById("mf-note").value = a?.note || "";
     document.getElementById("mf-weight").value = a?.weight ?? 100;
     document.getElementById("mf-cap").value = a?.inflight_cap ?? 24;
+    document.getElementById("mf-allowlist").value = (a?.allowlist || []).join(", ");
     document.getElementById("mf-primary").checked = !!a?.primary;
     document.getElementById("mf-force").checked = false;
     document.getElementById("mf-check").textContent = "";
@@ -86,6 +103,8 @@
       weight: parseInt(document.getElementById("mf-weight").value || "100", 10),
       inflight_cap: parseInt(document.getElementById("mf-cap").value || "24", 10),
       primary: document.getElementById("mf-primary").checked,
+      allowlist: document.getElementById("mf-allowlist").value
+        .split(/[,，]/).map(s => s.trim()).filter(Boolean),
     };
     const key = document.getElementById("mf-key").value.trim();
     const check = document.getElementById("mf-check");
@@ -149,6 +168,30 @@
   /* ---- 绑定 ---- */
   document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("acct-add").onclick = () => openForm(null);
+    document.getElementById("acct-export").onclick = async () => {
+      const r = await API.get("/api/accounts/export?with_secrets=false");
+      if (r.code !== 0) return UI.toast(r.message, true);
+      const blob = new Blob([JSON.stringify(r.data, null, 2)], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `siphon-accounts-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click(); URL.revokeObjectURL(a.href);
+      UI.toast("已导出(不含 key 明文)");
+    };
+    document.getElementById("acct-import").onclick = () => {
+      const inp = document.createElement("input");
+      inp.type = "file"; inp.accept = ".json";
+      inp.onchange = async () => {
+        try {
+          const data = JSON.parse(await inp.files[0].text());
+          const r = await API.post("/api/accounts/import",
+            { accounts: data.accounts || [], mode: "merge" });
+          if (r.code === 0) { UI.toast(`已导入 ${r.data.imported} 个账号`); render(); }
+          else UI.toast(r.message, true);
+        } catch (e) { UI.toast("文件不是合法 JSON", true); }
+      };
+      inp.click();
+    };
     document.getElementById("acct-tbody").addEventListener("click", async e => {
       const btn = e.target.closest("button[data-act]");
       if (!btn) return;
@@ -184,7 +227,7 @@
         overflow: document.getElementById("pol-overflow").value,
         affinity_ttl: parseInt(document.getElementById("pol-ttl").value || "3600", 10),
         primary_inflight_cap: parseInt(document.getElementById("pol-cap").value || "24", 10),
-        free_routing: document.getElementById("pol-free").checked,
+        free_routing: document.getElementById("pol-free").value === "true",
       });
       if (r.code === 0) UI.toast("策略已保存并热加载");
       else UI.toast(r.message, true);

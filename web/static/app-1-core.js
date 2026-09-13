@@ -48,7 +48,7 @@ const Fmt = {
   esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); },
 };
 
-/* 主题(与投研终端同机制) */
+/* 主题切换(data-theme + localStorage, 防闪烁脚本在各 HTML 头部) */
 (function () {
   try {
     let t = localStorage.getItem("theme");
@@ -107,6 +107,20 @@ const SSE = {
     if (!d) return;
     d.className = "dot " + (this.live ? "live" : "off");
     d.title = this.live ? "实时已连接" : "实时断开(自动重连)";
+  },
+};
+
+/* 流动线: 顶栏下的 2px 水流, 每笔请求脉冲一次(签名动效, reduced-motion 静止) */
+const Flow = {
+  el: null, _h: 0,
+  pulse() {
+    if (!this.el) this.el = document.getElementById("flow-line");
+    if (!this.el) return;
+    this.el.classList.remove("pulse");
+    void this.el.offsetWidth;          // 重启动画
+    this.el.classList.add("pulse");
+    clearTimeout(this._h);
+    this._h = setTimeout(() => this.el.classList.remove("pulse"), 950);
   },
 };
 

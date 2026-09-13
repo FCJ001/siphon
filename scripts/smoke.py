@@ -25,6 +25,7 @@ os.environ.update(
     OPENCODE_BASE_URL=f"http://127.0.0.1:{MOCK}/v1",
     OPENCODE_KEYS="sk-mock-key-1,sk-mock-key-2",   # 引导建两个账号
     SIPHON_POLL_INTERVAL="3600",
+    SIPHON_OPT_EFFORT="1",                          # 冒烟要验证 effort 改写(生产默认关)
 )
 
 import httpx  # noqa: E402
@@ -105,7 +106,7 @@ def main() -> int:
 
     # 2 非流式: 应自动绕开 429 的 key1, 落在 key2, 并透传 usage
     #   带 tools(触发分轮 effort 改写) + 低温度(启用精确回放)
-    TOOLS = [{"type": "function", "function": {"name": "get_day_kline", "parameters": {}}}]
+    TOOLS = [{"type": "function", "function": {"name": "query_data", "parameters": {}}}]
     body = {"model": "deepseek-v4-flash", "reasoning_effort": "max",
             "temperature": 0.1, "tools": TOOLS,
             "messages": [{"role": "user", "content": "你好"}]}

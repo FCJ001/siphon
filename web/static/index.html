@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Siphon · 中转台</title>
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2214%22%20fill%3D%22%23C8102E%22/%3E%3Ctext%20x%3D%2250%25%22%20y%3D%2254%25%22%20text-anchor%3D%22middle%22%20dominant-baseline%3D%22central%22%20font-size%3D%2240%22%20font-family%3D%22PingFang%20SC%22%20font-weight%3D%22600%22%20fill%3D%22%23FBF9F3%22%3E%E8%99%B9%3C/text%3E%3C/svg%3E">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2214%22%20fill%3D%22%23D8404A%22/%3E%3Ctext%20x%3D%2250%25%22%20y%3D%2254%25%22%20text-anchor%3D%22middle%22%20dominant-baseline%3D%22central%22%20font-size%3D%2240%22%20font-family%3D%22PingFang%20SC%22%20font-weight%3D%22600%22%20fill%3D%22%23FBF9F3%22%3E%E8%99%B9%3C/text%3E%3C/svg%3E">
   <script>
     // 主题初始化(防闪烁): 优先 localStorage, 否则跟随系统
     (function () {
@@ -16,7 +16,7 @@
     })();
     if (!localStorage.getItem("siphon_token")) location.href = "/login";
   </script>
-  <link rel="stylesheet" href="/static/style.css?v=20260913a">
+  <link rel="stylesheet" href="/static/style.css?v=20260913b">
 </head>
 <body>
 <header class="topbar">
@@ -24,7 +24,7 @@
     <span class="brand-mark">虹</span>
     <div class="brand-text">
       <h1>Siphon 中转台</h1>
-      <span class="brand-sub">OpenCode Go 账号池 · 省 token 中转</span>
+      <span class="brand-sub">SIPHON RELAY · OPENCODE GO</span>
     </div>
   </div>
   <nav class="page-switch" id="page-switch" role="tablist">
@@ -38,11 +38,12 @@
     <button class="btn sm" onclick="API.logout()">退出</button>
   </div>
 </header>
+<div class="flow-line" id="flow-line"><i></i></div>
 
 <main>
   <!-- ================= 总览 ================= -->
   <section class="page active" id="page-overview">
-    <div class="grid kpis" id="kpis"></div>
+    <div class="readout" id="readout"></div>
 
     <div class="toolbar">
       <div class="seg" id="range-seg">
@@ -51,39 +52,42 @@
         <button data-range="30d">30日</button>
       </div>
       <div class="grow"></div>
-      <span class="tag" style="font-size:11px">基线口径 = 中档模型全价(deepseek-v4-flash)</span>
+      <span class="tag" id="baseline-note" style="font-size:11px"></span>
     </div>
 
     <div class="grid row-2">
       <div class="card">
-        <h3>token 用量趋势 <span class="right">输入(命中/未命中) + 输出, 逐小时</span></h3>
+        <h3><span class="eyebrow">Token flow · <span class="zh">用量趋势</span></span>
+            <span class="right">输入(命中/未命中) + 输出, 逐小时</span></h3>
         <div id="trend-chart"></div>
       </div>
       <div class="card">
-        <h3>节省归因 <span class="right">基线 → 实际</span></h3>
+        <h3><span class="eyebrow">Savings · <span class="zh">节省归因</span></span>
+            <span class="right">基线 → 实际</span></h3>
         <div id="wf-chart"></div>
         <div class="tag" id="wf-note" style="font-size:11px;margin-top:8px"></div>
       </div>
     </div>
 
-    <div class="grid row-2" style="margin-top:14px">
-      <div class="card">
-        <h3>账号配额 <span class="right">最紧窗口已用 %</span></h3>
-        <div class="grid row-3" id="rings"></div>
-      </div>
-      <div class="card">
-        <h3>模型分布 <span class="right">
-          <select id="model-metric" style="border:0;background:none;color:var(--muted);font-size:11px">
-            <option value="cost">按成本</option>
-            <option value="requests">按调用数</option>
-          </select></span></h3>
-        <div id="models-chart"></div>
-      </div>
+    <div class="card" style="margin-top:14px">
+      <h3><span class="eyebrow">Sight glass · <span class="zh">账号水位</span></span>
+          <span class="right">三窗 = 5小时 / 周 / 月 · 虚线为 85% 警戒</span></h3>
+      <div class="gauges" id="gauges"></div>
     </div>
 
-    <div class="card" style="margin-top:14px">
-      <h3>实时请求 <span class="right">effort 改写与 <span class="hi">↩replay</span> 会高亮</span></h3>
-      <div class="feed" id="feed"></div>
+    <div class="grid row-2" style="margin-top:14px">
+      <div class="card">
+        <h3><span class="eyebrow">Live · <span class="zh">实时请求</span></span></h3>
+        <div class="feed" id="feed"></div>
+      </div>
+      <div class="card">
+        <h3><span class="eyebrow">Models · <span class="zh">模型分布</span></span>
+            <span class="right"><select id="model-metric">
+              <option value="cost">按成本</option>
+              <option value="requests">按调用数</option>
+            </select></span></h3>
+        <div id="models-chart"></div>
+      </div>
     </div>
   </section>
 
@@ -91,6 +95,8 @@
   <section class="page" id="page-accounts">
     <div class="toolbar">
       <button class="btn primary" id="acct-add">+ 添加账号</button>
+      <button class="btn" id="acct-export">导出配置</button>
+      <button class="btn" id="acct-import">导入配置</button>
       <div class="grow"></div>
       <span class="tag" style="font-size:11px">保存前自动试调 /usage 校验 key</span>
     </div>
@@ -98,15 +104,17 @@
     <div class="card">
       <table>
         <thead><tr>
-          <th>账号</th><th>状态</th><th>主力</th><th>权重</th><th>在途</th>
-          <th>额度(5h)</th><th>已用</th><th>模型级熔断</th><th>操作</th>
+          <th class="eyebrow">账号</th><th class="eyebrow">状态</th><th class="eyebrow">主力</th>
+          <th class="eyebrow">权重</th><th class="eyebrow">在途</th><th class="eyebrow">已用</th>
+          <th class="eyebrow">熔断</th><th class="eyebrow">操作</th>
         </tr></thead>
         <tbody id="acct-tbody"></tbody>
       </table>
     </div>
 
     <div class="card" style="margin-top:14px">
-      <h3>全局账号策略 <span class="right">保存即热加载</span></h3>
+      <h3><span class="eyebrow">Policy · <span class="zh">全局账号策略</span></span>
+          <span class="right">保存即热加载</span></h3>
       <div class="fgrid">
         <label class="f">溢出策略
           <select id="pol-overflow">
@@ -131,17 +139,15 @@
   <section class="page" id="page-logs">
     <div class="card">
       <div class="toolbar">
-        <select id="lf-account" style="padding:5px 8px;border:1px solid var(--border);border-radius:7px;background:var(--panel-2);color:var(--text)">
-          <option value="">全部账号</option>
-        </select>
-        <input id="lf-model" placeholder="模型名包含…" style="width:150px;padding:5px 8px;border:1px solid var(--border);border-radius:7px;background:var(--panel-2);color:var(--text)">
-        <select id="lf-status" style="padding:5px 8px;border:1px solid var(--border);border-radius:7px;background:var(--panel-2);color:var(--text)">
+        <select id="lf-account"><option value="">全部账号</option></select>
+        <input id="lf-model" placeholder="模型名包含…" style="width:150px">
+        <select id="lf-status">
           <option value="">全部状态</option><option value="ok">ok</option><option value="error">error</option>
         </select>
-        <select id="lf-cached" style="padding:5px 8px;border:1px solid var(--border);border-radius:7px;background:var(--panel-2);color:var(--text)">
+        <select id="lf-cached">
           <option value="">缓存不限</option><option value="1">有命中</option><option value="0">无命中</option>
         </select>
-        <select id="lf-hours" style="padding:5px 8px;border:1px solid var(--border);border-radius:7px;background:var(--panel-2);color:var(--text)">
+        <select id="lf-hours">
           <option value="24">近24h</option><option value="168" selected>近7天</option><option value="720">近30天</option>
         </select>
         <button class="btn sm" id="lf-refresh">刷新</button>
@@ -152,8 +158,10 @@
       </div>
       <table>
         <thead><tr>
-          <th>时间</th><th>账号</th><th>模型</th><th>effort</th>
-          <th>输入(缓存)</th><th>输出</th><th>省下</th><th>工具轮</th><th>耗时</th><th>状态</th>
+          <th class="eyebrow">时间</th><th class="eyebrow">账号</th><th class="eyebrow">模型</th>
+          <th class="eyebrow">Effort</th><th class="eyebrow">输入(缓存)</th><th class="eyebrow">输出</th>
+          <th class="eyebrow">省下</th><th class="eyebrow">工具轮</th><th class="eyebrow">耗时</th>
+          <th class="eyebrow">状态</th>
         </tr></thead>
         <tbody id="lg-tbody"></tbody>
       </table>
@@ -167,7 +175,7 @@
 <!-- 添加/编辑账号 -->
 <div class="modal" id="modal-form">
   <h2 id="mf-title">添加账号</h2>
-  <fieldset><legend>基础</legend>
+  <fieldset><legend>BASIC · 基础</legend>
     <label class="f">API Key
       <input id="mf-key" type="password" placeholder="sk-..."></label>
     <div class="fgrid">
@@ -175,12 +183,14 @@
       <label class="f">备注<input id="mf-note"></label>
     </div>
   </fieldset>
-  <fieldset><legend>路由</legend>
+  <fieldset><legend>ROUTING · 路由</legend>
     <div class="fgrid">
       <label class="f">权重(1–100)<input id="mf-weight" type="number" value="100"></label>
       <label class="f">在途上限<input id="mf-cap" type="number" value="24"></label>
     </div>
     <label class="f">设为主力(同一时间仅一个)<input id="mf-primary" type="checkbox" style="width:auto"></label>
+    <label class="f">模型白名单(逗号分隔, 空 = 允许全部)
+      <input id="mf-allowlist" placeholder="deepseek-v4-flash, deepseek-v4.1-flash"></label>
   </fieldset>
   <div class="err" id="mf-check"></div>
   <label class="f" id="mf-force-row" style="display:none">
@@ -194,35 +204,36 @@
 <!-- 账号详情 -->
 <div class="modal" id="modal-detail">
   <h2 id="d-title"></h2>
-  <fieldset><legend>配额窗口</legend>
+  <fieldset><legend>QUOTA · 配额窗口</legend>
     <table><tbody id="d-wins"></tbody></table>
   </fieldset>
-  <fieldset><legend>本月模型级消耗(本地账本口径)</legend>
-    <table><thead><tr><th>模型</th><th>tokens</th><th>成本</th><th>上限进度</th></tr></thead>
+  <fieldset><legend>MODEL USAGE · 本月模型级消耗(本地账本口径)</legend>
+    <table><thead><tr><th class="eyebrow">模型</th><th class="eyebrow">tokens</th>
+      <th class="eyebrow">成本</th><th class="eyebrow">上限进度</th></tr></thead>
       <tbody id="d-models"></tbody></table>
   </fieldset>
-  <fieldset><legend>熔断状态</legend><div id="d-breaker"></div></fieldset>
-  <fieldset><legend>近期请求</legend><div class="feed" id="d-reqs"></div></fieldset>
+  <fieldset><legend>BREAKER · 熔断状态</legend><div id="d-breaker"></div></fieldset>
+  <fieldset><legend>RECENT · 近期请求</legend><div class="feed" id="d-reqs"></div></fieldset>
   <div class="foot">
     <button class="btn" id="d-reset-session">重置 session</button>
-    <button class="btn" id="d-reset-breaker">重置熔断</button>
+    <button class="btn danger" id="d-reset-breaker">重置熔断</button>
     <button class="btn primary" id="d-close">关闭</button>
   </div>
 </div>
 
-<script src="/static/app-0-chart.js?v=20260913a"></script>
-<script src="/static/app-1-core.js?v=20260913a"></script>
-<script src="/static/app-2-overview.js?v=20260913a"></script>
-<script src="/static/app-3-accounts.js?v=20260913a"></script>
-<script src="/static/app-4-logs.js?v=20260913a"></script>
+<script src="/static/app-0-chart.js?v=20260913b"></script>
+<script src="/static/app-1-core.js?v=20260913b"></script>
+<script src="/static/app-2-overview.js?v=20260913b"></script>
+<script src="/static/app-3-accounts.js?v=20260913b"></script>
+<script src="/static/app-4-logs.js?v=20260913b"></script>
 <script>
 document.addEventListener("DOMContentLoaded", async () => {
   if (!localStorage.getItem("siphon_token")) return;
   document.querySelectorAll(".page-switch button").forEach(b =>
     b.onclick = () => Pages.show(b.dataset.page));
-  Pages.show("overview");
+  const want = new URLSearchParams(location.search).get("page");   // 深链: /?page=accounts
+  Pages.show(want && document.getElementById("page-" + want) ? want : "overview");
   SSE.connect();
-  // 日志页的账号下拉
   API.get("/api/accounts").then(r => {
     if (r.code !== 0) return;
     const sel = document.getElementById("lf-account");

@@ -105,7 +105,7 @@ const Chart = (() => {
 
     const cum = new Array(n).fill(0);
     series.forEach((sr, si) => {
-      const c = color(si);
+      const c = sr.color || color(si);           // 允许按语义指定颜色
       let d = "", dArea = "";
       sr.values.forEach((v, i) => {
         const base = stack ? cum[i] : 0;
@@ -127,12 +127,13 @@ const Chart = (() => {
         "stroke-width": stack ? 1.2 : 1.8 }));
     });
 
-    // 图例
+    // 图例(与图形同色: 优先语义色)
     if (opt.legend !== false && series.length) {
       const lg = document.createElement("div"); lg.className = "legend";
       series.forEach((sr, si) => {
+        const c = sr.color || color(si);
         const s = document.createElement("span");
-        s.innerHTML = `<i style="background:${color(si)}"></i>${sr.name}`;
+        s.innerHTML = `<i style="background:${c}"></i>${sr.name}`;
         lg.appendChild(s);
       });
       el.appendChild(lg);
@@ -207,32 +208,43 @@ const Chart = (() => {
     el.innerHTML = ""; el.appendChild(svg);
   }
 
-  /* ---------- 节省归因瀑布 ---------- */
+  /* ---------- 节省归因瀑布(斜纹填充: 省下的段 = 工程图剖面线) ---------- */
   function waterfall(el, opt) {
     const H = opt.height || 200;
     const { svg, W } = prepare(el, H);
+    const defs = svgEl("defs");
+    defs.innerHTML =
+      `<pattern id="wf-hatch" width="6" height="6" patternTransform="rotate(45)" ` +
+      `patternUnits="userSpaceOnUse">` +
+      `<rect width="6" height="6" fill="var(--flow-dim)"/>` +
+      `<line x1="0" y1="0" x2="0" y2="6" stroke="var(--flow)" stroke-width="1.4"/></pattern>`;
+    svg.appendChild(defs);
     const { baseline, actual, parts } = opt;
     const padL = 10, padR = 74, padT = 14, padB = 20;
     const iw = W - padL - padR, ih = H - padT - padB;
-    const bars = [{ label: "基线(全价)", from: 0, to: baseline, color: "var(--c2)" }];
+    const bars = [{ label: "基线(全价)", from: 0, to: baseline, fill: "var(--c2)", solid: true }];
     let cur = baseline;
     parts.forEach(p => {
       if (!p.amount) return;
-      bars.push({ label: p.label, from: cur - p.amount, to: cur, color: "var(--c4)", neg: true, amt: p.amount });
+      bars.push({ label: p.label, from: cur - p.amount, to: cur, fill: "url(#wf-hatch)", neg: true, amt: p.amount });
       cur -= p.amount;
     });
-    bars.push({ label: "实际成本", from: 0, to: actual, color: "var(--c1)" });
+    bars.push({ label: "实际成本", from: 0, to: actual, fill: "var(--c4)", solid: true });
     const maxV = baseline || 1;
     const bw = Math.min(64, iw / bars.length * 0.62);
     const gap = iw / bars.length;
     bars.forEach((b, i) => {
       const cx = padL + gap * i + (gap - bw) / 2;
       const y1 = padT + ih * (1 - b.to / maxV), y2 = padT + ih * (1 - b.from / maxV);
-      svg.appendChild(svgEl("rect", { x: cx, y: y1, width: bw, height: Math.max(2, y2 - y1),
-        fill: b.color, rx: 3, opacity: b.neg ? .55 : .9 }));
+      const rect = svgEl("rect", { x: cx, y: y1, width: bw, height: Math.max(2, y2 - y1),
+        fill: b.fill, rx: b.neg ? 0 : 3, stroke: b.neg ? "var(--flow)" : "none", "stroke-width": b.neg ? 1 : 0 });
+      svg.appendChild(rect);
       const t = svgEl("text", { x: cx + bw / 2, y: y1 - 5, "text-anchor": "middle",
         "font-size": 9.5, fill: "var(--muted)", "font-family": "var(--mono)" });
-      t.textContent = b.neg ? `−$${b.amt.toFixed(2)}` : `$${b.to.toFixed(2)}`;
+      // 小额段保留 4 位小数, 否则两段都显示 $0.00
+      t.textContent = b.neg
+        ? `−$${b.amt < 0.01 ? b.amt.toFixed(4) : b.amt.toFixed(2)}`
+        : `$${b.to.toFixed(2)}`;
       svg.appendChild(t);
       const lb = svgEl("text", { x: cx + bw / 2, y: H - 6, "text-anchor": "middle",
         "font-size": 9, fill: "var(--muted)" });
@@ -241,7 +253,7 @@ const Chart = (() => {
     });
     if (opt.savings_pct != null) {
       const t = svgEl("text", { x: W - padR + 4, y: padT + 8, "font-size": 11,
-        fill: "var(--ok)", "font-weight": 600 });
+        fill: "var(--flow)", "font-weight": 600, "font-family": "var(--mono)" });
       t.textContent = `省 ${opt.savings_pct}%`; svg.appendChild(t);
     }
   }
